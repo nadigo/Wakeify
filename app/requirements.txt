@@ -1,0 +1,39 @@
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+
+# Template Engine
+jinja2==3.1.4
+
+# Environment Variables
+python-dotenv==1.0.1
+
+# Scheduling
+apscheduler==3.10.4
+
+# HTTP Requests
+requests==2.32.3
+
+# Form parsing for FastAPI
+python-multipart==0.0.12
+
+# Security
+itsdangerous==2.2.0
+
+# Network Discovery
+zeroconf==0.132.2
+
+# WebSocket support for Spotify Connect protocol
+websocket-client==1.6.4
+
+# Cryptography for Spotify ZeroConf authentication
+cryptography==43.0.3
+
+# Timezone support
+pytz==2024.2
+
+# Playback Module Dependencies
+spotipy==2.25.0
+tenacity==8.2.3
+click==8.1.7
+pydantic==2.10.3

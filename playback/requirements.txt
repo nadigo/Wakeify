@@ -1,0 +1,9 @@
+zeroconf==0.132.2
+requests==2.32.3
+spotipy==2.25.0
+tenacity==8.2.3
+pydantic==2.10.3
+python-dotenv==1.0.1
+click==8.1.7
+spotifywebapipython==1.1.0
+

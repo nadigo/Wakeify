@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wakeify - Wake up and smell the coffee</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.ico">
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f7;
+            color: #1d1d1f;
+            line-height: 1.4;
+        }
+        
+        .container {
+            max-width: 480px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* Header Banner */
+        .header-banner {
+            background: #3b82f6;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .alarm-icon {
+            font-size: 24px;
+        }
+        
+        .header-text h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .header-text p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .settings-icon {
+            width: 20px;
+            height: 20px;
+            opacity: 0.8;
+            cursor: pointer;
+        }
+        
+        /* Card Styles */
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        /* Active Alarms Section */
+        .alarms-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        
+        .alarms-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .alarm-count {
+            background: #3b82f6;
+            color: white;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .no-alarms {
+            text-align: center;
+            color: #86868b;
+            font-size: 16px;
+            padding: 20px 0;
+        }
+        
+        .alarm-item {
+            background: #f5f5f7;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid #e5e5e7;
+        }
+        
+        .alarm-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .alarm-time {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .alarm-actions {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-play {
+            background: #3b82f6;
+            color: white;
+        }
+        
+        .btn-play:hover {
+            background: #2563eb;
+        }
+        
+        .btn-stop {
+            background: #ff3b30;
+            color: white;
+        }
+        
+        .btn-stop:hover {
+            background: #d70015;
+        }
+        
+        .btn-delete {
+            background: #8e8e93;
+            color: white;
+        }
+        
+        .btn-delete:hover {
+            background: #6d6d70;
+        }
+        
+        .alarm-details {
+            font-size: 14px;
+            color: #86868b;
+            line-height: 1.4;
+        }
+        
+        .alarm-playlist {
+            font-weight: 500;
+            color: #1d1d1f;
+            margin-bottom: 4px;
+        }
+        
+        .alarm-meta {
+            font-size: 12px;
+        }
+        
+        /* Form Styles */
+        .form-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        .form-label {
+            display: block;
+            font-weight: 500;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .form-row .form-select {
+            flex: 1;
+        }
+        
+        .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #d1d1d6;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6,9 12,15 18,9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+            transition: border-color 0.2s;
+        }
+        
+        .form-select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        
+        .time-inputs {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .time-inputs .form-select {
+            flex: 1;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #3b82f6;
+        }
+        
+        .checkbox-group label {
+            font-size: 14px;
+            color: #1d1d1f;
+            cursor: pointer;
+        }
+        
+        .days-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 12px;
+        }
+        
+        .day-checkbox {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .day-checkbox input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            accent-color: #3b82f6;
+        }
+        
+        .day-label {
+            font-size: 12px;
+            color: #1d1d1f;
+            cursor: pointer;
+            text-align: center;
+        }
+        
+        .volume-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .volume-label {
+            font-size: 14px;
+            color: #1d1d1f;
+            min-width: 80px;
+        }
+        
+        .volume-slider {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+            background: #e5e5e7;
+            outline: none;
+            appearance: none;
+        }
+        
+        .volume-slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+        }
+        
+        .volume-slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3);
+        }
+        
+        .submit-btn {
+            width: 100%;
+            padding: 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 8px;
+        }
+        
+        .submit-btn:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+        }
+        
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+        
+        /* Status Panel Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            animation: fadeIn 0.2s;
+        }
+        
+        .modal-overlay.active {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 400px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            animation: slideUp 0.3s;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            margin-left: -8px;
+            margin-right: -8px;
+            padding-left: 8px;
+            padding-right: 8px;
+        }
+        
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            line-height: 1;
+            cursor: pointer;
+            color: #86868b;
+            padding: 0;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-close:hover {
+            color: #1d1d1f;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+        }
+        
+        .status-label {
+            font-size: 14px;
+            color: #86868b;
+        }
+        
+        .status-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-badge.connected {
+            background: #34d399;
+            color: white;
+        }
+        
+        .status-badge.disconnected {
+            background: #fca5a5;
+            color: white;
+        }
+        
+        .status-section {
+            margin-bottom: 24px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid #e5e5e7;
+        }
+        
+        .status-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .icon-btn {
+            padding: 8px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            overflow: visible;
+        }
+        
+        .icon-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: #1d1d1f;
+            transition: all 0.2s;
+        }
+        
+        .icon-btn:hover {
+            background: #f5f5f5;
+        }
+        
+        .icon-btn:hover svg {
+            fill: #3b82f6;
+        }
+        
+        .icon-btn:active {
+            transform: scale(0.95);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        /* Responsive */
+        @media (min-width: 768px) {
+            .container {
+                max-width: 600px;
+            }
+        }
+  </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header Banner -->
+        <div class="header-banner">
+            <div class="header-left">
+                <div class="alarm-icon">⏰</div>
+                <div class="header-text">
+                    <h1>Wakeify</h1>
+                    <p>Wake up and smell the coffee ☕</p>
+        </div>
+            </div>
+            <svg class="settings-icon" onclick="toggleStatusPanel()" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"></path>
+            </svg>
+        </div>
+        
+        <!-- Active Alarms Section -->
+            <div class="card">
+            <div class="alarms-header">
+                <h2 class="alarms-title">Active Alarms</h2>
+                <div class="alarm-count">{{ alarms|length }}</div>
+            </div>
+            
+            {% if alarms %}
+                {% for alarm in alarms %}
+                <div class="alarm-item">
+                    <div class="alarm-header">
+                        <div class="alarm-time">
+                            {% set hour = alarm.hour|int %}
+                            {% set minute = "%02d" | format(alarm.minute|int) %}
+                            {% if hour == 0 %}
+                                12:{{ minute }} AM
+                            {% elif hour < 12 %}
+                                {{ hour }}:{{ minute }} AM
+                            {% elif hour == 12 %}
+                                12:{{ minute }} PM
+                            {% else %}
+                                {{ hour - 12 }}:{{ minute }} PM
+                            {% endif %}
+                            {% if alarm.stop_hour is defined and alarm.stop_minute is defined %}
+                                {% set stop_hour = alarm.stop_hour|int %}
+                                {% set stop_minute = "%02d" | format(alarm.stop_minute|int) %}
+                                -
+                                {% if stop_hour == 0 %}
+                                    12:{{ stop_minute }} AM
+                                {% elif stop_hour < 12 %}
+                                    {{ stop_hour }}:{{ stop_minute }} AM
+                                {% elif stop_hour == 12 %}
+                                    12:{{ stop_minute }} PM
+                                {% else %}
+                                    {{ stop_hour - 12 }}:{{ stop_minute }} PM
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                        <div class="alarm-actions">
+                            <button class="btn btn-play" onclick="playNow('{{ alarm.id }}')">Play Now</button>
+                            <button class="btn btn-stop" onclick="stopPlayback('{{ alarm.id }}')">Stop</button>
+                            <button class="btn btn-delete" onclick="deleteAlarm('{{ alarm.id }}')">Delete</button>
+                        </div>
+                    </div>
+                    <div class="alarm-details">
+                        <div class="alarm-playlist">{{ alarm.playlist_name }}</div>
+                        <div class="alarm-meta">
+                            {% set dow_list = alarm.dow.split(',') %}
+                            {% for day in dow_list %}
+                                {{ day|title }}
+                                {% if not loop.last %}, {% endif %}
+                            {% endfor %}
+                            • {{ alarm.device_name }} • Vol {{ alarm.volume }}%{% if alarm.shuffle %} • Shuffle ON{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="no-alarms">No active alarms</div>
+            {% endif %}
+        </div>
+        
+        <!-- Spotify Connection Screen -->
+        {% if not spotify_connected %}
+        <div class="card">
+            <div style="text-align: center; padding: 40px 20px;">
+                <!-- Success Message -->
+                {% if auth_success %}
+                <div style="background: #d4edda; color: #155724; padding: 12px; border-radius: 8px; margin-bottom: 20px;">
+                    ✅ Successfully connected to Spotify!
+                    </div>
+                {% endif %}
+                
+                <!-- Error Message -->
+                {% if auth_error %}
+                <div style="background: #f8d7da; color: #721c24; padding: 12px; border-radius: 8px; margin-bottom: 20px;">
+                    ❌ Connection failed: {{ auth_error }}
+            </div>
+                {% endif %}
+                
+                <div style="font-size: 48px; margin-bottom: 20px;">🎵</div>
+                <h2 style="color: #1d1d1f; margin-bottom: 12px;">Connect to Spotify</h2>
+                <p style="color: #86868b; margin-bottom: 30px; line-height: 1.5;">
+                    To set up alarms, you need to connect your Spotify account.<br>
+                    This allows the app to access your playlists and control playback.
+                </p>
+                <a href="{{ spotify_auth_url }}" style="display: inline-block; background: #1db954; color: white; padding: 16px 32px; border-radius: 12px; text-decoration: none; font-weight: 600; font-size: 16px;">
+                    Connect Spotify Account
+                </a>
+                <p style="color: #86868b; font-size: 12px; margin-top: 20px;">
+                    You'll be redirected to Spotify to authorize the app
+                </p>
+            </div>
+        </div>
+        {% else %}
+        <!-- Set New Alarm Form -->
+            <div class="card">
+            <h2 class="form-title">Set New Alarm</h2>
+            
+                <form method="post" action="/set_alarm">
+                <!-- Playlist -->
+                        <div class="form-group">
+                    <label class="form-label">Playlist</label>
+                    <div class="form-row">
+                        <select class="form-select" name="playlist_uri" id="playlist_uri" required>
+                                {% if playlists %}
+                                    <option value="">Select a playlist...</option>
+                                    {% for playlist in playlists %}
+                                    <option value="{{ playlist.uri }}">{{ playlist.name }}</option>
+                                    {% endfor %}
+                                {% else %}
+                                    <option value="">No playlists available - Connect to Spotify first</option>
+                                {% endif %}
+                            </select>
+                        <div class="checkbox-group">
+                            <input type="checkbox" name="shuffle" id="shuffle"{% if default_shuffle %} checked{% endif %}>
+                            <label for="shuffle">Shuffle</label>
+                        </div>
+                    </div>
+                        </div>
+                        
+                <!-- Device -->
+                        <div class="form-group">
+                    <label class="form-label">Device</label>
+                    <select class="form-select" name="device_name" id="device_name" required>
+                                {% if devices %}
+                                    {% for device in devices %}
+                                    <option value="{{ device.name }}"{% if device.name == default_speaker %} selected{% endif %}>
+                                        {{ device.name }}
+                                    </option>
+                                    {% endfor %}
+                                {% else %}
+                                    <option value="">No devices available - Discover devices first</option>
+                                {% endif %}
+                            </select>
+                    </div>
+                    
+                <!-- Start Time -->
+                        <div class="form-group">
+                    <label class="form-label">Start Time</label>
+                    <div class="time-inputs">
+                        <select class="form-select" name="hour" id="hour" required>
+                                    {% for hour in range(1, 13) %}
+                                        <option value="{{ hour }}"{% if hour == 7 %} selected{% endif %}>{{ hour }}</option>
+                                    {% endfor %}
+                                </select>
+                        <select class="form-select" name="minute" id="minute" required>
+                                {% for minute in range(60) %}
+                                <option value="{{ minute }}"{% if minute == 0 %} selected{% endif %}>{{ "%02d"|format(minute) }}</option>
+                                {% endfor %}
+                            </select>
+                        <select class="form-select" name="hour_period" id="hour_period" required>
+                            <option value="AM" selected>AM</option>
+                            <option value="PM">PM</option>
+                        </select>
+                        </div>
+                    </div>
+                    
+                <!-- Stop Time -->
+                        <div class="form-group">
+                    <label class="form-label">Stop Time (Optional)</label>
+                    <div class="time-inputs">
+                        <select class="form-select" name="stop_hour" id="stop_hour">
+                            <option value="">N/A</option>
+                                    {% for hour in range(1, 13) %}
+                                        <option value="{{ hour }}">{{ hour }}</option>
+                                    {% endfor %}
+                                </select>
+                        <select class="form-select" name="stop_minute" id="stop_minute">
+                            <option value="">N/A</option>
+                                {% for minute in range(60) %}
+                                <option value="{{ minute }}">{{ "%02d"|format(minute) }}</option>
+                                {% endfor %}
+                            </select>
+                        <select class="form-select" name="stop_hour_period" id="stop_hour_period">
+                            <option value="">N/A</option>
+                            <option value="AM">AM</option>
+                            <option value="PM">PM</option>
+                        </select>
+                        </div>
+                    </div>
+                    
+                <!-- Days of Week -->
+                    <div class="form-group">
+                    <label class="form-label">Days of Week</label>
+                    <div class="days-grid">
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="mon" id="mon" checked>
+                            <label class="day-label" for="mon">Mon</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="tue" id="tue" checked>
+                            <label class="day-label" for="tue">Tue</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="wed" id="wed" checked>
+                            <label class="day-label" for="wed">Wed</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="thu" id="thu" checked>
+                            <label class="day-label" for="thu">Thu</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="fri" id="fri" checked>
+                            <label class="day-label" for="fri">Fri</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="sat" id="sat">
+                            <label class="day-label" for="sat">Sat</label>
+                            </div>
+                        <div class="day-checkbox">
+                                <input type="checkbox" name="dow" value="sun" id="sun">
+                            <label class="day-label" for="sun">Sun</label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                <!-- Volume -->
+                <div class="form-group">
+                    <div class="volume-group">
+                        <label class="volume-label">Volume: <span id="volume-display">{{ default_volume }}</span>%</label>
+                        <input type="range" name="volume" id="volume" min="0" max="100" value="{{ default_volume }}" class="volume-slider">
+                    </div>
+            </div>
+            
+                <!-- Submit Button -->
+                <button type="submit" class="submit-btn">Set Alarm</button>
+                                </form>
+                </div>
+                {% endif %}
+    </div>
+    
+    <script>
+        // Volume slider
+        const volumeSlider = document.getElementById('volume');
+        const volumeDisplay = document.getElementById('volume-display');
+        
+        volumeSlider.addEventListener('input', function() {
+            volumeDisplay.textContent = this.value;
+        });
+        
+        // System status panel
+        function toggleStatusPanel() {
+            const modal = document.getElementById('statusModal');
+            modal.classList.add('active');
+        }
+        
+        // Play alarm now
+        async function playNow(alarmId) {
+            try {
+                const response = await fetch(`/play_alarm_now/${alarmId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    alert('Playback started!');
+                } else {
+                    const error = await response.json();
+                    alert(error.detail || 'Failed to start playback');
+                }
+            } catch (error) {
+                console.error('Error starting playback:', error);
+                alert('Failed to start playback');
+            }
+        }
+        
+        // Delete alarm
+        async function deleteAlarm(alarmId) {
+            try {
+                const response = await fetch(`/delete_alarm/${alarmId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    alert('Failed to delete alarm');
+                }
+            } catch (error) {
+                console.error('Error deleting alarm:', error);
+                alert('Failed to delete alarm');
+            }
+        }
+        
+        // Stop playback
+        async function stopPlayback(alarmId) {
+            try {
+                const response = await fetch('/stop_current_playback', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('Playback stopped');
+                } else {
+                    alert('Failed to stop playback');
+                }
+            } catch (error) {
+                console.error('Error stopping playback:', error);
+                alert('Failed to stop playback');
+            }
+        }
+    </script>
+    
+    <!-- Status Panel Modal -->
+    <div id="statusModal" class="modal-overlay" onclick="closeStatusPanel(event)">
+        <div class="modal-content status-modal" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 class="modal-title">System Status</h2>
+                <button class="modal-close" onclick="closeStatusPanel()">✕</button>
+            </div>
+            
+            <!-- Connection Status -->
+            <div class="status-section">
+                <div class="status-item">
+                    <span class="status-label">🎵 Spotify</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="status-badge {{ 'connected' if spotify_connected else 'disconnected' }}">
+                            {{ 'Connected' if spotify_connected else 'Disconnected' }}
+                        </span>
+                        {% if spotify_connected %}
+                        <button class="icon-btn" onclick="disconnectSpotify()" title="Disconnect">
+                            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                <path fill="none" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round" d="M18 6L6 18M6 6l12 12"/>
+                            </svg>
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Speakers Info -->
+            <div class="status-section">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-size: 13px; color: #86868b;">🔊 Speakers ({{ devices|length }})</span>
+                    <button class="icon-btn" onclick="refreshSpeakers()" title="Refresh">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                    </button>
+                </div>
+                <div id="speakersList" style="max-height: 150px; overflow-y: auto;">
+                    {% for device in devices %}
+                    <div style="padding: 6px 0; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+                        {% if device.is_online %}
+                        <svg style="width: 16px; height: 16px; fill: #10b981;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10"/></svg>
+                        {% else %}
+                        <svg style="width: 16px; height: 16px; fill: #6b7280;" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill-opacity="0.3" stroke="#6b7280" stroke-width="1"/></svg>
+                        {% endif %}
+                        <span style="font-weight: 500; flex: 1;">{{ device.name }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            
+            <!-- Alarms Info -->
+            <div class="status-section">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <span style="font-size: 13px; color: #86868b;">⏰ Alarms: <strong>{{ alarms|length }}</strong></span>
+                    {% if alarms|length > 0 %}
+                    <button class="icon-btn" onclick="clearAllAlarms()" title="Clear all">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function closeStatusPanel(event) {
+            const modal = document.getElementById('statusModal');
+            if (event && modal.contains(event.target)) {
+                return;
+            }
+            modal.classList.remove('active');
+        }
+        
+        async function refreshSpeakers() {
+            try {
+                const response = await fetch('/api/devices/refresh', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    location.reload();
+                } else {
+                    alert('Failed to refresh speakers: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Failed to refresh speakers: ' + error.message);
+            }
+        }
+        
+        async function clearAllAlarms() {
+            if (!confirm('Are you sure you want to delete all alarms?')) {
+                return;
+            }
+            try {
+                const alarms = {{ alarms|tojson }};
+                const promises = alarms.map(alarm => 
+                    fetch(`/delete_alarm/${alarm.id}`, { method: 'DELETE' })
+                );
+                await Promise.all(promises);
+                location.reload();
+            } catch (error) {
+                alert('Failed to clear alarms');
+            }
+        }
+        
+        async function disconnectSpotify() {
+            if (!confirm('Are you sure you want to disconnect from Spotify?')) {
+                return;
+            }
+            // Delete the token file
+            try {
+                await fetch('/api/disconnect', { method: 'POST' });
+                location.reload();
+            } catch (error) {
+                alert('Failed to disconnect Spotify');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+services:
+  wakeify:
+    image: python:3.11-slim
+    container_name: wakeify
+    restart: unless-stopped
+    
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    
+    environment:
+      # Spotify API Configuration (from .env file)
+      # These are REQUIRED - set them in your .env file
+      - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID}
+      - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET}
+      - SPOTIFY_REDIRECT_URI=${SPOTIFY_REDIRECT_URI}
+      
+      # Alarm Configuration
+      - DEFAULT_SPEAKER=${DEFAULT_SPEAKER:-}
+      - DEFAULT_VOLUME=${DEFAULT_VOLUME:-30}
+      - DEFAULT_SHUFFLE=${DEFAULT_SHUFFLE:-true}
+      
+      # System Configuration
+      - BASE_DIR=${BASE_DIR:-/data/wakeify}
+      - APP_SECRET=${APP_SECRET}
+      
+      # Playback Configuration
+      - ALARM_PREWARM_ENABLED=${ALARM_PREWARM_ENABLED:-true}
+      - DEVICE_AUTO_DISCOVERY=${DEVICE_AUTO_DISCOVERY:-true}
+      
+      # T-60s Timeline Configuration (optimized for all devices)
+      - ALARM_PREWARM_S=${ALARM_PREWARM_S:-60}
+      - ALARM_POLL_FAST_S=${ALARM_POLL_FAST_S:-5.0}
+      - ALARM_POLL_DEADLINE_S=${ALARM_POLL_DEADLINE_S:-20}
+      - ALARM_DEBOUNCE_S=${ALARM_DEBOUNCE_S:-0.6}
+      - ALARM_RETRY_404_S=${ALARM_RETRY_404_S:-0.7}
+      - ALARM_FAILOVER_S=${ALARM_FAILOVER_S:-2.0}
+      
+      # Device Discovery Configuration
+      - MDNS_DISCOVERY_TIMEOUT_S=${MDNS_DISCOVERY_TIMEOUT_S:-1.5}
+      - DEVICE_WAKE_TIMEOUT_S=${DEVICE_WAKE_TIMEOUT_S:-22}
+      
+      # Fallback Configuration (Spotify Connect)
+      - FALLBACK_TIMEOUT_S=${FALLBACK_TIMEOUT_S:-10}
+      - FALLBACK_QUICK_CHECK_ATTEMPTS=${FALLBACK_QUICK_CHECK_ATTEMPTS:-2}
+      - FALLBACK_WAKE_ATTEMPTS=${FALLBACK_WAKE_ATTEMPTS:-3}
+      - FALLBACK_MDNS_TIMEOUT_S=${FALLBACK_MDNS_TIMEOUT_S:-5}
+      
+      # Circuit Breaker Configuration
+      - CIRCUIT_BREAKER_FAILURE_THRESHOLD=${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-3}
+      - CIRCUIT_BREAKER_RECOVERY_TIMEOUT_S=${CIRCUIT_BREAKER_RECOVERY_TIMEOUT_S:-300}
+      
+      # Logging Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      
+      # System Configuration
+      - TZ=${TZ:-America/New_York}
+      - PYTHONUNBUFFERED=1
+      
+      # Performance Configuration
+      - MAX_CONCURRENT_ALARMS=${MAX_CONCURRENT_ALARMS:-5}
+      - ALARM_QUEUE_SIZE=${ALARM_QUEUE_SIZE:-100}
+      
+      # Monitoring Configuration
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+      - HEALTH_CHECK_INTERVAL_S=${HEALTH_CHECK_INTERVAL_S:-30}
+      
+      # Spotify Credentials for spotifyd (for AirPlay streaming - optional)
+      - SPOTIFY_USERNAME=${SPOTIFY_USERNAME}
+      - SPOTIFY_PASSWORD=${SPOTIFY_PASSWORD}
+    
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BROADCAST
+    
+    dns:
+      - ${GATEWAY_IP:-192.168.1.1}
+      - 8.8.8.8
+      - 1.1.1.1
+      
+    
+    extra_hosts:
+      - "host.docker.internal:${GATEWAY_IP:-192.168.1.1}"
+    
+    volumes:
+      # Data persistence
+      - data:/data/wakeify/data
+      
+      # SSL certificates
+      - ${BASE_DIR:-/data/wakeify}/ssl:${BASE_DIR:-/data/wakeify}/ssl
+      
+      # Application code (read-only) - using absolute paths
+      # Update BASE_DIR in .env if installing to a different location
+      - ${BASE_DIR:-/data/wakeify}/app:${BASE_DIR:-/data/wakeify}/app:ro
+      - ${BASE_DIR:-/data/wakeify}/playback:${BASE_DIR:-/data/wakeify}/playback
+      - ${BASE_DIR:-/data/wakeify}/scripts:${BASE_DIR:-/data/wakeify}/scripts:ro
+      - ${BASE_DIR:-/data/wakeify}/tests:${BASE_DIR:-/data/wakeify}/tests:ro
+      
+      # Configuration files
+      - ${BASE_DIR:-/data/wakeify}/.env:${BASE_DIR:-/data/wakeify}/.env
+    working_dir: ${BASE_DIR:-/data/wakeify}
+    
+    # Install system dependencies and start Wakeify
+    # This command sets up SSL certificates, installs dependencies, and starts the app
+    command: ["/bin/bash", "-c", "apt-get update && apt-get install -y --no-install-recommends curl wget iputils-ping net-tools avahi-utils sox ffmpeg shairport-sync tzdata libnss3-tools && rm -rf /var/lib/apt/lists/* && ln -sf /usr/share/zoneinfo/${TZ:-America/New_York} /etc/localtime && echo '${TZ:-America/New_York}' > /etc/timezone && (curl -L https://github.com/FiloSottile/mkcert/releases/latest/download/mkcert-v1.4.4-linux-amd64 -o mkcert && chmod +x mkcert && mv mkcert /usr/local/bin/ || true) && mkcert -install && mkdir -p ${BASE_DIR:-/data/wakeify}/ssl && cd ${BASE_DIR:-/data/wakeify}/ssl && (mkcert srv.local ${CONTAINER_IP:-192.168.1.11} 2>/dev/null || echo 'Certificate already exists') && (if [ ! -f srv.local.pem ]; then mv srv.local+1.pem srv.local.pem; mv srv.local+1-key.pem srv.local-key.pem 2>/dev/null || true; fi) && cp -f srv.local.pem ${CONTAINER_IP:-192.168.1.11}.pem 2>/dev/null || true && cp -f srv.local-key.pem ${CONTAINER_IP:-192.168.1.11}-key.pem 2>/dev/null || true && (curl -L https://github.com/Spotifyd/spotifyd/releases/download/v0.4.1/spotifyd-linux-x86_64-default.tar.gz -o /tmp/spotifyd.tar.gz 2>/dev/null && tar -xzf /tmp/spotifyd.tar.gz -C /usr/local/bin/ spotifyd && chmod +x /usr/local/bin/spotifyd && rm /tmp/spotifyd.tar.gz || echo 'spotifyd install failed or already exists') && pip install --no-cache-dir -r ${BASE_DIR:-/data/wakeify}/app/requirements.txt && pip install --no-cache-dir -e ${BASE_DIR:-/data/wakeify}/playback && mkdir -p ${BASE_DIR:-/data/wakeify}/data ${BASE_DIR:-/data/wakeify}/logs && cd ${BASE_DIR:-/data/wakeify}/app && python main.py"]
+    
+    healthcheck:
+      test: ["CMD", "curl", "-k", "-f", "https://localhost:443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    networks:
+      macvlan:
+        # Container IP - set CONTAINER_IP in .env file
+        ipv4_address: ${CONTAINER_IP:-192.168.1.11}
+
+volumes:
+  data:
+    driver: local
+    name: wakeify-data
+
+networks:
+  macvlan:
+    external: true
+    # Create this network if it doesn't exist:
+    # docker network create -d macvlan \
+    #   --subnet=${NETWORK_SUBNET:-192.168.1.0/24} \
+    #   --gateway=${GATEWAY_IP:-192.168.1.1} \
+    #   -o parent=${NETWORK_INTERFACE:-eth0} \
+    #   macvlan

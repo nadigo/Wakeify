@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Alarm clock face -->
+  <circle cx="50" cy="50" r="45" fill="#3b82f6" stroke="#2563eb" stroke-width="3"/>
+  
+  <!-- Inner circle (face) -->
+  <circle cx="50" cy="50" r="38" fill="#ffffff"/>
+  
+  <!-- Hour markers -->
+  <line x1="50" y1="12" x2="50" y2="18" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/>
+  <line x1="50" y1="82" x2="50" y2="88" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/>
+  <line x1="12" y1="50" x2="18" y2="50" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/>
+  <line x1="82" y1="50" x2="88" y2="50" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/>
+  
+  <!-- Clock hands -->
+  <!-- Hour hand (pointing to 7) -->
+  <line x1="50" y1="50" x2="50" y2="30" stroke="#1d1d1f" stroke-width="3" stroke-linecap="round" transform="rotate(210 50 50)"/>
+  
+  <!-- Minute hand (pointing to 12) -->
+  <line x1="50" y1="50" x2="50" y2="20" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round"/>
+  
+  <!-- Center dot -->
+  <circle cx="50" cy="50" r="4" fill="#1d1d1f"/>
+  
+  <!-- Alarm bells on top -->
+  <path d="M 25 15 Q 20 5 15 5 Q 10 5 10 10 Q 10 12 12 15" fill="#ff3b30" stroke="#d70015" stroke-width="1.5"/>
+  <path d="M 75 15 Q 80 5 85 5 Q 90 5 90 10 Q 90 12 88 15" fill="#ff3b30" stroke="#d70015" stroke-width="1.5"/>
+  
+  <!-- Bell highlights -->
+  <ellipse cx="25" cy="12" rx="3" ry="2" fill="#ff8787" opacity="0.6"/>
+  <ellipse cx="75" cy="12" rx="3" ry="2" fill="#ff8787" opacity="0.6"/>
+</svg>
+
