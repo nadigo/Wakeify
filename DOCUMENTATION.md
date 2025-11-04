@@ -257,21 +257,42 @@ T-30s: getInfo Phase
 
 T-10s: addUser Phase
   └─ Authenticate device via addUser endpoint
+  └─ Token refresh before and after addUser
+  └─ Wait ALARM_ADDUSER_WAIT_S (default: 5s) after completion
 
 T-10s to T-0: Cloud Polling
-  ├─ Poll Spotify Web API every 5 seconds
+  ├─ Poll Spotify Web API (intervals: ALARM_POLL_SLEEP_FAST_S/SLOW_S)
   ├─ Check if device appears in /me/player/devices
-  └─ Wait up to 20 seconds total
+  ├─ Extended deadline if addUser succeeded (+ALARM_POLL_DEADLINE_EXTENSION_S)
+  ├─ Token refresh periodically during polling
+  └─ Wait up to ALARM_POLL_DEADLINE_S (default: 20s) total
 
 T-0: Play Phase
   ├─ Transfer playback to device
   ├─ Set volume
   ├─ Start playlist
-  └─ Retry on 404 errors
+  ├─ Retry on 404 errors
+  └─ Confirmation loop (verify device is actively playing)
 
 T+2s: Failover Check
   └─ If playback failed → Activate fallback
 ```
+
+**Fast Path Optimization:**
+When a device is already available in Spotify Web API (common after first use), Wakeify uses an optimized fast path:
+- **Skips:** mDNS discovery, getInfo, addUser, and cloud polling
+- **Skips:** Debounce delay (device already active)
+- **Includes:** Immediate playback with confirmation loop
+- **Result:** ~1.6-1.7 seconds total execution time
+
+**Configurable Timeouts:**
+All timing values are configurable via environment variables (see [Configuration](#configuration) section). This allows fine-tuning for different network conditions and device types.
+
+**Enhanced Authentication:**
+- Token refresh before and after `addUser` to ensure valid credentials
+- Extended polling deadline (+15s default) if `addUser` succeeds
+- `getInfo` call after `addUser` to extract additional device names for better matching
+- Periodic token refresh during cloud polling phase
 
 ### Fallback Sequence
 
@@ -349,6 +370,29 @@ Optional settings control:
 - Fallback behavior
 - Circuit breaker thresholds
 - Logging level
+
+### Alarm Playback Timeouts
+
+All alarm playback timeouts are configurable via environment variables. These allow fine-tuning for different network conditions and device types:
+
+**Polling and Deadlines:**
+- `ALARM_POLL_DEADLINE_S` (default: 20): Total time to poll for device in Spotify API (seconds)
+- `ALARM_POLL_DEADLINE_EXTENSION_S` (default: 15): Additional polling time after successful addUser (seconds)
+- `ALARM_POLL_SLEEP_FAST_S` (default: 0.5): Sleep interval during fast polling (seconds)
+- `ALARM_POLL_SLEEP_SLOW_S` (default: 1.0): Sleep interval during slow polling (seconds)
+
+**Device Communication:**
+- `ALARM_MDNS_TIMEOUT_S` (default: 1.5): mDNS discovery timeout (seconds)
+- `ALARM_GETINFO_TIMEOUT_S` (default: 1.5): getInfo request timeout (seconds)
+- `ALARM_ADDUSER_TIMEOUT_S` (default: 2.5): addUser request timeout (seconds)
+- `ALARM_DEVICE_INFO_TIMEOUT_S` (default: 2.0): getDeviceInfo request timeout (seconds)
+- `ALARM_VERIFY_DEVICE_TIMEOUT_S` (default: 0.5): verifyDeviceReady timeout (seconds)
+
+**Authentication and Confirmation:**
+- `ALARM_ADDUSER_WAIT_S` (default: 5.0): Wait time after addUser before checking devices (seconds)
+- `ALARM_CONFIRMATION_SLEEP_S` (default: 0.2): Sleep time in playback confirmation loop (seconds)
+
+All timeout values can be adjusted in `docker-compose.yml` or `.env` file to optimize for your specific network and devices.
 
 ### Docker Compose Configuration
 
@@ -501,6 +545,31 @@ Spotify OAuth tokens stored in `data/token.json`:
 - **Method:** HTTP GET to getInfo endpoint
 - **Total for 4 devices:** ~0.4 seconds
 
+### Alarm Playback Performance
+
+**Fast Path (webapi_direct):**
+- **Total Duration:** 1.6-1.7 seconds
+- **Discovery:** 167-264ms (mDNS discovery when device not in cache)
+- **GetInfo:** Skipped (device already available via Web API)
+- **AddUser:** Skipped (device already authenticated)
+- **Cloud Visibility:** Skipped (device already in Spotify devices)
+- **Play:** 764-771ms (playback start and confirmation)
+- **Optimizations:** Debounce removed, immediate confirmation loop
+
+**Fast Path Characteristics:**
+- Triggered when device is already available in Spotify Web API
+- No authentication delays (device already registered)
+- Minimal network overhead (single API call for playback)
+- Playback confirmation loop ensures device is actively playing
+
+**Typical Performance Breakdown:**
+- Device discovery (if needed): 167-264ms
+- Playback start: ~400ms
+- Confirmation verification: ~350ms
+- Total: 1.6-1.7 seconds from alarm trigger to confirmed playback
+
+**Note:** Performance may vary based on network latency, device responsiveness, and Spotify API response times. The fast path represents the optimal case where the device is already authenticated and available.
+
 ---
 
 ## Known Limitations
@@ -531,7 +600,21 @@ Spotify OAuth tokens stored in `data/token.json`:
 
 ## Changelog
 
-### v2.0.0 (Current)
+### v2.1.0 (Current)
+
+- **All timeouts made configurable** via environment variables for fine-tuning
+- **Fast path optimization:** Removed debounce delay when device already available via Web API
+- **Playback confirmation loop:** Ensures device is actively playing before declaring success
+- **Enhanced authentication flow:**
+  - Token refresh before and after `addUser`
+  - Extended polling deadline (+15s) after successful `addUser`
+  - Periodic token refresh during cloud polling
+  - `getInfo` call after `addUser` to extract additional device names
+- **Performance improvements:** Fast path execution time reduced to ~1.6-1.7 seconds
+- **Pydantic V2 compatibility:** Replaced deprecated `.dict()` with `.model_dump()`
+- **Improved error messages:** Better guidance for AirPlay fallback setup
+
+### v2.0.0
 
 - Added APScheduler for precise timing
 - Implemented stop-time feature
@@ -546,7 +629,7 @@ Spotify OAuth tokens stored in `data/token.json`:
 
 ---
 
-**Last Updated:** 2025-01-02  
-**Version:** 2.0.0  
+**Last Updated:** 2025-11-03  
+**Version:** 2.1.0  
 **Status:** Production Ready  
 **Project:** Wakeify - Wake up and smell the coffee ☕
