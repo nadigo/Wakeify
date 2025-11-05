@@ -20,17 +20,15 @@
 
 ### Purpose
 
-Wakeify is a FastAPI-based alarm system that plays Spotify playlists on any Spotify Connect devices at scheduled times with comprehensive fallback mechanisms.
+Wakeify is a web-based alarm system that plays Spotify playlists on any Spotify Connect devices at scheduled times with comprehensive fallback mechanisms.
 
 ### Key Features
 
-- **Timeline-Based Execution** (T-60s pre-warm to T+2s failover)
+- **Timeline-Based Execution** 
 - **Automatic Device Discovery** via mDNS (Zeroconf)
 - **Spotify Connect Integration** via Web API
 - **Comprehensive Fallbacks** (mDNS auth, AirPlay)
 - **APScheduler** for precise timing
-- **Circuit Breaker Pattern** for failure prevention
-- **Structured Logging** with metrics
 - **Web UI** for alarm management
 
 ### Technology Stack
@@ -580,21 +578,18 @@ Spotify OAuth tokens stored in `data/token.json`:
    - No HTTP fallback available
 
 2. **Device Authentication**
-   - Some devices require manual authentication via Spotify app
-   - HTTP 415 errors may occur for some devices (not supported)
+   - Some devices require manual authentication via Spotify app before inital play
+   
+3. **Parallel playback**
+   - Alarm will switch to active player due to spotify limitetion of one playback per user's deivce 
 
-3. **AirPlay Fallback**
-   - Removed tone playback
-   - Only works if device authenticated in Spotify
-
-4. **Device Switching**
-   - Never switches to alternative devices
-   - Falls back gracefully if target device unavailable
-
-5. **mDNS Reliability**
+4. **mDNS Reliability**
    - Requires macvlan or host networking
    - `NET_BROADCAST` capability required
    - May fail in bridge network mode
+  
+5. **AirPlay Fallback**
+   - Not implamented - planned in future versions 
 
 ---
 
