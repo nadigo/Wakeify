@@ -135,7 +135,10 @@ alarm_config = None
 # Performance: Device cache
 device_cache = None
 device_cache_timestamp = None
-device_cache_ttl = 300  # Cache for 5 minutes (increased from 60s)
+device_cache_ttl = 600  # Cache for 10 minutes (increased from 5 minutes)
+# Friendly name cache: maps (ip, port) -> (name, timestamp)
+friendly_name_cache = {}
+friendly_name_cache_ttl = 900  # Cache friendly names for 15 minutes (device names rarely change)
 
 # Performance: Playlist cache
 playlist_cache = None
@@ -688,15 +691,15 @@ def background_device_registration():
             time.sleep(60)
 
 def background_cache_refresh():
-    """Refresh device cache in background every 120s to keep it warm."""
-    global device_cache, device_cache_timestamp, alarm_config, running
+    """Refresh device cache in background every 300s to keep it warm."""
+    global device_cache, device_cache_timestamp, alarm_config, running, friendly_name_cache
     
     while running:
         try:
-            time.sleep(120)  # Wait 120 seconds between refreshes (increased from 50s)
+            time.sleep(300)  # Wait 300 seconds (5 minutes) between refreshes (increased from 120s)
             
-            # Skip if cache is still fresh (within 280s)
-            if device_cache_timestamp and (time.time() - device_cache_timestamp) < 280:
+            # Skip if cache is still fresh (within 600s = 10 minutes)
+            if device_cache_timestamp and (time.time() - device_cache_timestamp) < 600:
                 logger.debug("Cache still fresh, skipping refresh")
                 continue
             
@@ -713,44 +716,64 @@ def background_cache_refresh():
                 devices_list = []
                 device_names_seen = set()
                 
-                # Add devices from config - refresh names from getInfo
+                # Add devices from config - refresh names from getInfo (with caching)
                 if alarm_config.targets:
+                    current_time = time.time()
                     for device in alarm_config.targets:
-                        # Try to get fresh friendly name from getInfo (overrides saved name)
+                        # Check friendly name cache first
+                        cache_key = (device.ip, device.port)
                         fresh_name = device.name  # Default to saved name
-                        try:
-                            import sys
-                            sys.path.insert(0, str(Path(__file__).parent))
-                            from device_registry import DeviceRegistry
-                            device_registry = DeviceRegistry(alarm_config)
-                            from alarm_playback.discovery import DiscoveryResult
-                            discovery_result = DiscoveryResult(
-                                instance_name=device.name,
-                                ip=device.ip,
-                                port=device.port,
-                                cpath=device.cpath,
-                                txt_records={}
-                            )
-                            fresh_name = device_registry._extract_friendly_name(discovery_result)
-                            if not fresh_name:
-                                fresh_name = device.name
-                            # If we got a better name from getInfo, update the saved device profile
-                            elif fresh_name != device.name:
-                                try:
-                                    # Update the device profile with the fresh name
-                                    device.name = fresh_name
-                                    device_data = {
-                                        "devices": [device.model_dump() for device in alarm_config.targets],
-                                        "last_updated": str(time.time())
-                                    }
-                                    with open(DEVICES_FILE, 'w') as f:
-                                        json.dump(device_data, f, indent=2)
-                                except Exception as e:
-                                    logger.debug(f"Could not save updated name for {device.name}: {e}")
-                        except Exception as e:
-                            logger.debug(f"Could not refresh name for {device.name} from getInfo: {e}")
-                            fresh_name = device.name  # Fallback to saved name
                         
+                        # Use cached friendly name if available and fresh
+                        if cache_key in friendly_name_cache:
+                            cached_name, cached_time = friendly_name_cache[cache_key]
+                            if (current_time - cached_time) < friendly_name_cache_ttl:
+                                fresh_name = cached_name
+                                logger.debug(f"Using cached friendly name '{fresh_name}' for {device.ip}:{device.port}")
+                            else:
+                                # Cache expired, remove it
+                                del friendly_name_cache[cache_key]
+                        
+                        # Only call getInfo if not cached or cache expired
+                        if cache_key not in friendly_name_cache:
+                            try:
+                                import sys
+                                sys.path.insert(0, str(Path(__file__).parent))
+                                from device_registry import DeviceRegistry
+                                device_registry = DeviceRegistry(alarm_config)
+                                from alarm_playback.discovery import DiscoveryResult
+                                discovery_result = DiscoveryResult(
+                                    instance_name=device.name,
+                                    ip=device.ip,
+                                    port=device.port,
+                                    cpath=device.cpath,
+                                    txt_records={}
+                                )
+                                fresh_name = device_registry._extract_friendly_name(discovery_result)
+                                if not fresh_name:
+                                    fresh_name = device.name
+                                else:
+                                    # Cache the friendly name
+                                    friendly_name_cache[cache_key] = (fresh_name, current_time)
+                                
+                                # If we got a better name from getInfo, update the saved device profile
+                                if fresh_name != device.name:
+                                    try:
+                                        # Update the device profile with the fresh name
+                                        device.name = fresh_name
+                                        device_data = {
+                                            "devices": [device.model_dump() for device in alarm_config.targets],
+                                            "last_updated": str(time.time())
+                                        }
+                                        with open(DEVICES_FILE, 'w') as f:
+                                            json.dump(device_data, f, indent=2)
+                                    except Exception as e:
+                                        logger.debug(f"Could not save updated name for {device.name}: {e}")
+                            except Exception as e:
+                                logger.debug(f"Could not refresh name for {device.name} from getInfo: {e}")
+                                fresh_name = device.name  # Fallback to saved name
+                        
+                        # Health check uses getInfo internally, but we can use a longer timeout since we're not in a hurry
                         health_info = check_device_health(device.ip, device.port, device.cpath, timeout_s=0.1)
                         devices_list.append({
                             "name": fresh_name,  # Use fresh name from getInfo
@@ -764,24 +787,50 @@ def background_cache_refresh():
                         })
                         device_names_seen.add(fresh_name)
                 
-                # Add mDNS devices - use DeviceRegistry to get names from device properties (getInfo)
-                mdns_devices = discover_all_connect_devices(1.0)
+                # Add mDNS devices - use DeviceRegistry to get names from device properties (getInfo with caching)
+                # Only do full discovery every 15 minutes to reduce network load
+                current_time = time.time()
+                last_discovery_time = getattr(background_cache_refresh, '_last_full_discovery', 0)
+                discovery_interval = 900  # 15 minutes
+                
+                mdns_devices = []
+                if (current_time - last_discovery_time) >= discovery_interval:
+                    mdns_devices = discover_all_connect_devices(1.0)
+                    background_cache_refresh._last_full_discovery = current_time
+                    logger.debug(f"Full mDNS discovery completed, found {len(mdns_devices)} devices")
+                else:
+                    logger.debug(f"Skipping full mDNS discovery (last discovery was {(current_time - last_discovery_time):.0f}s ago)")
+                
                 for dev in mdns_devices:
-                    # Use DeviceRegistry to extract friendly name (tries getInfo first)
+                    # Check friendly name cache first
+                    cache_key = (dev.ip, dev.port)
                     dev_name = None
-                    try:
-                        if alarm_config:
-                            import sys
-                            sys.path.insert(0, str(APP_DIR))
-                            from device_registry import DeviceRegistry
-                            device_registry = DeviceRegistry(alarm_config)
-                            dev_name = device_registry._extract_friendly_name(dev)
-                            if not dev_name:
-                                logger.info(f"_extract_friendly_name returned None for {dev.instance_name} ({dev.ip}:{dev.port})")
-                    except Exception as e:
-                        logger.warning(f"Error extracting friendly name for {dev.instance_name}: {e}")
-                        import traceback
-                        logger.debug(f"Traceback: {traceback.format_exc()}")
+                    
+                    # Use cached friendly name if available and fresh
+                    if cache_key in friendly_name_cache:
+                        cached_name, cached_time = friendly_name_cache[cache_key]
+                        if (current_time - cached_time) < friendly_name_cache_ttl:
+                            dev_name = cached_name
+                            logger.debug(f"Using cached friendly name '{dev_name}' for {dev.ip}:{dev.port}")
+                    
+                    # Only call getInfo if not cached
+                    if not dev_name:
+                        try:
+                            if alarm_config:
+                                import sys
+                                sys.path.insert(0, str(APP_DIR))
+                                from device_registry import DeviceRegistry
+                                device_registry = DeviceRegistry(alarm_config)
+                                dev_name = device_registry._extract_friendly_name(dev)
+                                if dev_name:
+                                    # Cache the friendly name
+                                    friendly_name_cache[cache_key] = (dev_name, current_time)
+                                else:
+                                    logger.info(f"_extract_friendly_name returned None for {dev.instance_name} ({dev.ip}:{dev.port})")
+                        except Exception as e:
+                            logger.warning(f"Error extracting friendly name for {dev.instance_name}: {e}")
+                            import traceback
+                            logger.debug(f"Traceback: {traceback.format_exc()}")
                     
                     # Fallback to instance_name if extraction failed
                     if not dev_name:
