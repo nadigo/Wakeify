@@ -267,7 +267,7 @@ class AlarmSpotifyClient:
     def is_device_online(self, device_name: str) -> bool:
         """Check if device is online and available"""
         device = self.get_device_by_name(device_name)
-        return device is not None and device.is_active
+        return bool(device and device.get('is_active'))
     
     def wait_for_device(self, device_name: str, timeout_s: float = 20.0) -> Optional[CloudDevice]:
         """
@@ -306,81 +306,16 @@ class AlarmSpotifyClient:
         
         return {
             "found": True,
-            "online": device.is_active,
-            "device_id": device.id,
-            "name": device.name,
-            "volume_percent": device.volume_percent,
-            "device_type": device.device_type,
-            "is_private_session": device.is_private_session,
-            "is_restricted": device.is_restricted
+            "online": device.get('is_active', False),
+            "device_id": device.get('id'),
+            "name": device.get('name'),
+            "volume_percent": device.get('volume_percent'),
+            "device_type": device.get('type'),
+            "is_private_session": device.get('is_private_session'),
+            "is_restricted": device.get('is_restricted')
         }
     
     def invalidate_cache(self) -> None:
         """Invalidate device cache to force fresh data"""
         self._device_cache["timestamp"] = 0
         logger.info("Device cache invalidated")
-
-
-def refresh_token_legacy(token: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Legacy token refresh for backward compatibility"""
-    if not token:
-        return None
-    
-    # Check if token needs refresh (60 seconds before expiry)
-    if time.time() <= token.get("expires_at", 0) - 60:
-        return token
-    
-    try:
-        import requests
-        
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": token.get("refresh_token"),
-        }
-        
-        if not data["refresh_token"]:
-            logger.error("No refresh token available")
-            return None
-        
-        # Get credentials from environment
-        client_id = os.environ.get("SPOTIFY_CLIENT_ID")
-        client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET")
-        
-        if not client_id or not client_secret:
-            logger.error("Spotify credentials not configured")
-            return None
-        
-        auth = (client_id, client_secret)
-        response = requests.post(
-            "https://accounts.spotify.com/api/token", 
-            data=data, 
-            auth=auth,
-            timeout=10
-        )
-        response.raise_for_status()
-        
-        fresh_token = token.copy()
-        fresh_token.update(response.json())
-        fresh_token["expires_at"] = int(time.time()) + fresh_token["expires_in"]
-        
-        # Save token
-        with open(TOKEN_FILE, "w") as f:
-            json.dump(fresh_token, f, indent=2)
-        
-        return fresh_token
-        
-    except Exception as e:
-        logger.error(f"Failed to refresh token: {e}")
-        return None
-
-
-def load_token_legacy() -> Optional[Dict[str, Any]]:
-    """Legacy token loading for backward compatibility"""
-    try:
-        if not os.path.exists(TOKEN_FILE):
-            return None
-        with open(TOKEN_FILE, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load token: {e}")
-        return None

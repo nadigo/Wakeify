@@ -98,7 +98,7 @@ class AlarmSystemConfig:
         
         # Core settings
         context_uri = os.environ.get("ALARM_CONTEXT_URI", "")
-        log_level = os.environ.get("LOG_LEVEL", "INFO")
+        log_level = os.environ.get("LOG_LEVEL", "WARNING")
         log_format = os.environ.get("LOG_FORMAT", "json")
         
         # Legacy settings
@@ -207,8 +207,13 @@ def load_alarm_config() -> AlarmSystemConfig:
 def save_fallback_config(config: FallbackConfig) -> None:
     """Save fallback configuration to file"""
     try:
+        if hasattr(config, "model_dump"):
+            payload = config.model_dump()
+        else:
+            from dataclasses import asdict as _asdict
+            payload = _asdict(config)
         with open(FALLBACK_CONFIG_FILE, 'w') as f:
-            json.dump(asdict(config), f, indent=2)
+            json.dump(payload, f, indent=2)
         logger.info(f"Saved fallback configuration to {FALLBACK_CONFIG_FILE}")
     except Exception as e:
         logger.error(f"Failed to save fallback configuration: {e}")

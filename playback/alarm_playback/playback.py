@@ -60,7 +60,15 @@ def start_play(api: 'SpotifyApiWrapper', device_id: str, context_uri: str, retry
     logger.info(f"Starting playback on device {device_id} with context {context_uri}, shuffle={shuffle}")
     
     try:
-        api.put_play(device_id=device_id, context_uri=context_uri, retry_404_delay_s=retry_404_delay_s, shuffle=shuffle)
+        play_kwargs = {
+            "device_id": device_id,
+            "context_uri": context_uri,
+            "retry_404_delay_s": retry_404_delay_s,
+        }
+        if shuffle:
+            play_kwargs["shuffle"] = True
+
+        api.put_play(**play_kwargs)
         logger.info(f"Successfully started playback on device {device_id}")
         
     except Exception as e:
