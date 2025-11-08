@@ -7,7 +7,6 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -29,7 +28,7 @@ from apscheduler.triggers.cron import CronTrigger
 from alarm_playback.logging_utils import setup_logging
 
 # Configure structured logging based on environment variables
-log_level = os.getenv("LOG_LEVEL", "INFO")
+log_level = os.getenv("LOG_LEVEL", "WARNING")
 log_format = os.getenv("LOG_FORMAT", "text")
 setup_logging(log_level=log_level, log_format=log_format)
 
@@ -127,7 +126,6 @@ sp_oauth = SpotifyOAuth(
 alarms: List[Dict[str, Any]] = []
 devices: List[Dict[str, Any]] = []
 spotify = None
-alarm_thread = None
 scheduler = None
 running = True
 alarm_config = None
@@ -197,7 +195,7 @@ def save_data():
     try:
         with open(ALARMS_FILE, 'w') as f:
             json.dump(alarms, f, indent=2)
-        logger.info(f"Saved {len(alarms)} alarm(s) to {ALARMS_FILE}")
+        logger.debug(f"Saved {len(alarms)} alarm(s) to {ALARMS_FILE}")
         with open(DEVICES_FILE, 'w') as f:
             json.dump(devices, f, indent=2)
         logger.debug(f"Saved {len(devices)} device(s) to {DEVICES_FILE}")
@@ -240,7 +238,7 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
             return
         
         # Use comprehensive playback engine
-        logger.info("Using comprehensive playback engine with T-60s timeline")
+        logger.debug("Using comprehensive playback engine with T-60s timeline")
         
         # Try to get existing device profile first, but don't create new ones via mDNS
         # Let the orchestrator handle Web API discovery first
@@ -252,7 +250,7 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
         
         # If no profile found, try to discover the device via mDNS and create profile with IP
         if not device_profile:
-            logger.info(f"Device {target_device_name} not found in registry, attempting mDNS discovery")
+            logger.debug(f"Device {target_device_name} not found in registry, attempting mDNS discovery")
             try:
                 from alarm_playback.discovery import discover_all_connect_devices
                 # Discover all devices
@@ -300,13 +298,23 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
                             cpath=dev.cpath or "/spotifyconnect/zeroconf",
                             volume_preset=DEFAULT_VOLUME
                         )
-                        logger.info(f"✓ Discovered device via mDNS: friendly_name='{dev_name}', instance_name='{dev.instance_name}' (matched alarm target '{target_device_name}')")
-                        logger.info(f"  Device profile created at {dev.ip}:{dev.port}, cpath={dev.cpath}")
+                        logger.debug(
+                            "✓ Discovered device via mDNS: friendly_name='%s', instance_name='%s' (matched alarm target '%s')",
+                            dev_name,
+                            dev.instance_name,
+                            target_device_name,
+                        )
+                        logger.debug(
+                            "Device profile created at %s:%s, cpath=%s",
+                            dev.ip,
+                            dev.port,
+                            dev.cpath,
+                        )
                         break
                 
                 # If still no profile, create minimal one
                 if not device_profile:
-                    logger.info(f"Could not discover {target_device_name} via mDNS, creating minimal profile")
+                    logger.debug(f"Could not discover {target_device_name} via mDNS, creating minimal profile")
                     device_profile = DeviceProfile(
                         name=target_device_name,
                         volume_preset=DEFAULT_VOLUME
@@ -334,7 +342,7 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
         # If not found in targets, add it
         if not found_in_targets:
             alarm_config.targets.append(device_profile)
-            logger.info(f"Added device {target_device_name} to orchestrator targets with volume {alarm_volume}%")
+            logger.debug(f"Added device {target_device_name} to orchestrator targets with volume {alarm_volume}%")
             # Save the device profile permanently so it persists with instance_name
             try:
                 import json
@@ -360,7 +368,7 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
         engine = AlarmPlaybackEngine(alarm_config)
         
         # Execute full timeline
-        logger.info(f"Starting T-60s timeline for {target_device_name}")
+        logger.debug(f"Starting T-60s timeline for {target_device_name}")
         metrics = engine.play_alarm(target_device_name)
         
         # Save device profiles after alarm execution to persist any learned Spotify device names
@@ -378,14 +386,21 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
             logger.debug(f"Could not save device profiles after alarm: {e}")
         
         # Log results
-        logger.info(f"Alarm execution completed:")
-        logger.info(f"  Branch: {metrics.branch}")
-        logger.info(f"  Total duration: {metrics.total_duration_ms}ms")
-        logger.info(f"  Discovery: {metrics.discovered_ms}ms")
-        logger.info(f"  GetInfo: {metrics.getinfo_ms}ms")
-        logger.info(f"  AddUser: {metrics.adduser_ms}ms")
-        logger.info(f"  Cloud visible: {metrics.cloud_visible_ms}ms")
-        logger.info(f"  Play: {metrics.play_ms}ms")
+        logger.info(
+            "Alarm %s completed in %sms (branch=%s)",
+            alarm_id,
+            metrics.total_duration_ms,
+            metrics.branch,
+        )
+        logger.debug(
+            "Alarm %s metrics: discovery=%sms getInfo=%sms addUser=%sms cloud_visible=%sms play=%sms",
+            alarm_id,
+            metrics.discovered_ms,
+            metrics.getinfo_ms,
+            metrics.adduser_ms,
+            metrics.cloud_visible_ms,
+            metrics.play_ms,
+        )
         
         if metrics.errors:
             logger.warning(f"Errors encountered: {len(metrics.errors)}")
@@ -398,106 +413,12 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
 
-def alarm_monitor():
-    """Monitor and execute alarms."""
-    global running
-    triggered_alarms = {}  # Track when alarms were triggered (alarm_id -> date string)
-    active_playback = {}  # Track which alarms are currently playing (alarm_id -> thread)
-    current_date = ""  # Track current date to reset triggered_alarms daily
-    
-    while running:
-        try:
-            current_time = datetime.now()
-            today = current_time.date().isoformat()
-            current_time_only = current_time.time()
-            
-            # Reset triggered alarms if we've moved to a new day
-            if today != current_date:
-                logger.info(f"New day: {today}. Resetting triggered alarms.")
-                triggered_alarms = {}
-                active_playback = {}
-                current_date = today
-            
-            for alarm in alarms[:]:  # Copy list to avoid modification during iteration
-                if not alarm.get('active', True):
-                    continue
-                
-                alarm_id = alarm['id']
-                
-                # Check stop time if alarm has stop time and is playing
-                stop_hour = alarm.get('stop_hour')
-                stop_minute = alarm.get('stop_minute')
-                if stop_hour is not None and stop_minute is not None and alarm_id in active_playback:
-                    stop_time = datetime.strptime(f"{stop_hour:02d}:{stop_minute:02d}", '%H:%M').time()
-                    time_diff_stop = abs((datetime.combine(current_time.date(), stop_time) - 
-                                        datetime.combine(current_time.date(), current_time_only)).total_seconds())
-                    
-                    if time_diff_stop <= 10:  # Within 10 seconds of stop time
-                        logger.info(f"Stop time reached for alarm {alarm_id} at {stop_hour:02d}:{stop_minute:02d}, stopping playback")
-                        # Stop playback
-                        sp = get_spotify_client()
-                        if sp:
-                            try:
-                                sp.pause_playback()
-                                logger.info(f"Successfully paused playback for alarm {alarm_id}")
-                            except Exception as e:
-                                logger.error(f"Failed to pause playback: {e}")
-                        # Remove from active playback
-                        active_playback.pop(alarm_id, None)
-                        logger.info(f"Removed alarm {alarm_id} from active playback tracking")
-                        continue
-                
-                # Check if alarm should trigger
-                alarm_hour = alarm.get('hour', 0)
-                alarm_minute = alarm.get('minute', 0)
-                alarm_time = datetime.strptime(f"{alarm_hour:02d}:{alarm_minute:02d}", '%H:%M').time()
-                
-                # Check if it's the right day of week
-                current_dow = current_time.strftime('%a').lower()
-                dow_string = alarm.get('dow', '')
-                if current_dow not in dow_string.lower():
-                    continue
-                
-                # Debug: log time check
-                logger.info(f"Checking alarm {alarm_id}: current={current_time.strftime('%H:%M:%S')}, target={alarm_hour:02d}:{alarm_minute:02d}")
-                
-                # Check if alarm should trigger (within 10 seconds to be more precise)
-                time_diff = abs((datetime.combine(current_time.date(), alarm_time) - 
-                               datetime.combine(current_time.date(), current_time_only)).total_seconds())
-                
-                if time_diff <= 10:  # Within 10 seconds for precision
-                    # Check if this alarm was already triggered today
-                    if alarm_id in triggered_alarms and triggered_alarms[alarm_id] == today:
-                        continue  # Already triggered today, skip
-                    
-                    logger.info(f"Alarm {alarm_id} triggered!")
-                    
-                    # Mark alarm as triggered for today
-                    triggered_alarms[alarm_id] = today
-                    
-                    # Run alarm in separate thread
-                    alarm_thread = threading.Thread(target=run_alarm, args=(alarm,))
-                    alarm_thread.daemon = True
-                    alarm_thread.start()
-                    active_playback[alarm_id] = alarm_thread
-                    
-                    # Remove alarm if it's a one-time alarm
-                    if not alarm.get('recurring', True):
-                        alarms.remove(alarm)
-                        save_data()
-            
-            time.sleep(10)  # Check every 10 seconds
-            
-        except Exception as e:
-            logger.error(f"Error in alarm monitor: {e}")
-            time.sleep(30)
-
 def prewarm_device(alarm: Dict[str, Any]) -> None:
     """Prewarm device 60 seconds before alarm time to wake it up."""
     try:
         alarm_id = alarm.get('id')
         target_device_name = alarm.get("device_name", DEFAULT_SPEAKER)
-        logger.info(f"Prewarming device {target_device_name} for alarm {alarm_id}")
+        logger.debug(f"Prewarming device {target_device_name} for alarm {alarm_id}")
         
         # Find device profile
         device_profile = None
@@ -523,7 +444,7 @@ def prewarm_device(alarm: Dict[str, Any]) -> None:
                             cpath=dev.cpath or "/spotifyconnect/zeroconf",
                             volume_preset=DEFAULT_VOLUME
                         )
-                        logger.info(f"Discovered device {dev.instance_name} for prewarm")
+                        logger.debug(f"Discovered device {dev.instance_name} for prewarm")
                         break
             except Exception as e:
                 logger.debug(f"Could not discover device during prewarm: {e}")
@@ -532,14 +453,14 @@ def prewarm_device(alarm: Dict[str, Any]) -> None:
         if device_profile and device_profile.ip:
             try:
                 from alarm_playback.fallback import _wake_device_via_ip
-                logger.info(f"Waking device {target_device_name} via IP {device_profile.ip}")
+                logger.debug(f"Waking device {target_device_name} via IP {device_profile.ip}")
                 _wake_device_via_ip(
                     device_profile.ip,
                     device_profile.port or 80,
                     device_profile.cpath or "/spotifyconnect/zeroconf",
                     target_device_name
                 )
-                logger.info(f"Successfully prewarmed device {target_device_name}")
+                logger.debug(f"Successfully prewarmed device {target_device_name}")
             except Exception as e:
                 logger.warning(f"Prewarm failed for {target_device_name}: {e}")
         else:
@@ -593,7 +514,7 @@ def schedule_alarms():
                 id=f"prewarm_{alarm_id}",
                 replace_existing=True
             )
-            logger.info(f"Scheduled prewarm for alarm {alarm_id} at {prewarm_hour:02d}:{prewarm_minute:02d} on {dow}")
+            logger.debug(f"Scheduled prewarm for alarm {alarm_id} at {prewarm_hour:02d}:{prewarm_minute:02d} on {dow}")
             
             # Schedule alarm start
             trigger = CronTrigger(hour=hour, minute=minute, day_of_week=day_of_week)
@@ -605,7 +526,7 @@ def schedule_alarms():
                 replace_existing=True,
                 misfire_grace_time=None  # Allow misfired alarms to run regardless of delay
             )
-            logger.info(f"Scheduled alarm {alarm_id} for {hour:02d}:{minute:02d} on {dow}")
+            logger.debug(f"Scheduled alarm {alarm_id} for {hour:02d}:{minute:02d} on {dow}")
             
             # Schedule alarm stop if stop time is set
             stop_hour = alarm.get('stop_hour')
@@ -620,7 +541,7 @@ def schedule_alarms():
                     replace_existing=True,
                     misfire_grace_time=None  # Allow misfired alarms to run regardless of delay
                 )
-                logger.info(f"Scheduled stop for alarm {alarm_id} at {stop_hour:02d}:{stop_minute:02d}")
+                logger.debug(f"Scheduled stop for alarm {alarm_id} at {stop_hour:02d}:{stop_minute:02d}")
         except Exception as e:
             logger.error(f"Failed to schedule alarm {alarm_id}: {e}")
 

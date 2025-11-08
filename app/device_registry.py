@@ -247,24 +247,6 @@ class DeviceRegistry:
         # If no meaningful cleaning, return None to use original
         return None
     
-    def _map_device_friendly_name(self, cleaned_name: str, txt_records: dict) -> Optional[str]:
-        """Return cleaned instance name as-is when device properties unavailable"""
-        try:
-            if not cleaned_name or len(cleaned_name) < 2:
-                return None
-            
-            # Only apply generic cleanup (removes technical suffixes)
-            friendly = self._clean_technical_name_to_friendly(cleaned_name)
-            if friendly:
-                return friendly
-            
-            # If no cleanup needed, return cleaned name as-is
-            return cleaned_name
-            
-        except Exception as e:
-            logger.error(f"Error mapping device friendly name: {e}")
-            return None
-    
     def _create_device_profile(self, discovery_result) -> Optional[DeviceProfile]:
         """Create device profile from discovery result"""
         try:
@@ -297,15 +279,6 @@ class DeviceRegistry:
         except Exception as e:
             logger.error(f"Failed to create device profile: {e}")
             return None
-    
-    def _create_default_profile(self, device_name: str) -> DeviceProfile:
-        """Create a default device profile (generic for all devices)"""
-        return DeviceProfile(
-            name=device_name,
-            auth_mode_for_adduser="access_token",  # Unified auth mode for all devices
-            volume_preset=35,
-            max_wake_wait_s=22
-        )
     
     def _update_device_status(self, device_profiles: List[DeviceProfile]) -> None:
         """Update device status information"""
