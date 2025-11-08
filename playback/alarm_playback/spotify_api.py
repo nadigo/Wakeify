@@ -7,7 +7,9 @@ import json
 import os
 import time
 import random
-from typing import List, Optional, Dict, Any
+import threading
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Tuple
 from spotipy import Spotify, SpotifyOAuth, SpotifyException
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -30,6 +32,10 @@ class TokenManager:
         self.auth_config = auth_config
         self._spotify = None
         self._oauth = None
+        self._token_info: Optional[Dict[str, Any]] = None
+        self._token_lock = threading.Lock()
+        self._last_refresh_ts: float = 0.0
+        self._refresh_margin_s = 120.0
     
     def _create_oauth_manager(self) -> SpotifyOAuth:
         """Create SpotifyOAuth manager"""
@@ -43,32 +49,79 @@ class TokenManager:
             )
         return self._oauth
     
+    def _token_file_path(self) -> Path:
+        data_dir = Path(os.environ.get("DATA_DIR", "/data/wakeify/data"))
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / "token.json"
+    
+    def _save_token_to_file(self, token_info: Dict[str, Any]) -> None:
+        try:
+            token_file = self._token_file_path()
+            token_file.write_text(json.dumps(token_info, indent=2))
+        except Exception as exc:
+            logger.debug(f"Failed to persist Spotify token to file: {exc}")
+    
+    def _ensure_token_info(self, force_refresh: bool = False) -> Tuple[Dict[str, Any], bool]:
+        """
+        Ensure we have a non-expired token_info payload.
+        
+        Returns:
+            tuple[token_info, refreshed_flag]
+        """
+        with self._token_lock:
+            refreshed = False
+            oauth = self._create_oauth_manager()
+            
+            if force_refresh or not self._token_info:
+                token_info = oauth.get_cached_token()
+                if not token_info:
+                    token_info = self._load_token_from_file()
+                
+                if not token_info and self.auth_config.refresh_token:
+                    try:
+                        token_info = oauth.refresh_access_token(self.auth_config.refresh_token)
+                        refreshed = True
+                        logger.info("Successfully refreshed Spotify token from environment refresh token")
+                    except Exception as exc:
+                        logger.error(f"Failed to refresh Spotify token from environment: {exc}")
+                        raise
+                elif not token_info:
+                    raise ValueError("No Spotify token available in cache, file, or environment refresh token")
+                
+                if refreshed:
+                    self._save_token_to_file(token_info)
+                self._token_info = token_info
+            
+            if not self._token_info:
+                raise ValueError("Spotify token info unavailable after initialization")
+            
+            expires_at = self._token_info.get("expires_at")
+            now = time.time()
+            if not expires_at or expires_at - now <= self._refresh_margin_s:
+                refresh_token = self._token_info.get("refresh_token") or self.auth_config.refresh_token
+                if not refresh_token:
+                    logger.error("Spotify token about to expire but no refresh_token is available")
+                else:
+                    try:
+                        token_info = oauth.refresh_access_token(refresh_token)
+                        refreshed = True
+                        self._token_info = token_info
+                        self._save_token_to_file(token_info)
+                        logger.debug("Spotify token refreshed due to expiry window")
+                    except Exception as exc:
+                        logger.error(f"Failed to refresh Spotify token using refresh token: {exc}")
+                        raise
+            
+            if refreshed:
+                self._spotify = None  # Force rebuild of spotipy client with new token
+                self._last_refresh_ts = time.time()
+            
+            return self._token_info, refreshed
+    
     def _create_spotify_client(self) -> Spotify:
         """Create authenticated Spotify client"""
         if self._spotify is None:
-            oauth = self._create_oauth_manager()
-            
-            # Try to get cached token first
-            token_info = oauth.get_cached_token()
-            
-            if not token_info:
-                # If no cached token, try to load from existing token.json file
-                token_info = self._load_token_from_file()
-                
-                if not token_info:
-                    # If no token file, try to refresh using the provided refresh token
-                    if self.auth_config.refresh_token:
-                        try:
-                            token_info = oauth.refresh_access_token(self.auth_config.refresh_token)
-                            logger.info("Successfully refreshed access token from env")
-                        except Exception as e:
-                            logger.error(f"Failed to refresh access token from env: {e}")
-                            raise
-                    else:
-                        raise ValueError("No refresh token available in environment or token file")
-                else:
-                    logger.info("Loaded token from existing token.json file")
-            
+            token_info, _ = self._ensure_token_info()
             self._spotify = Spotify(auth=token_info['access_token'])
         
         return self._spotify
@@ -76,16 +129,15 @@ class TokenManager:
     def _load_token_from_file(self) -> Optional[Dict[str, Any]]:
         """Load token from existing token.json file"""
         try:
-            token_file = os.path.join(os.environ.get("DATA_DIR", "/data/wakeify/data"), "token.json")
-            if os.path.exists(token_file):
-                with open(token_file, 'r') as f:
-                    token_data = json.load(f)
-                    # Check if token is still valid (not expired)
-                    if 'expires_at' in token_data and token_data['expires_at'] > time.time():
-                        return token_data
-                    # If expired but has refresh_token, return it for refresh
-                    elif 'refresh_token' in token_data:
-                        return token_data
+            token_file = self._token_file_path()
+            if token_file.exists():
+                token_data = json.loads(token_file.read_text())
+                # Check if token is still valid (not expired)
+                if token_data.get('expires_at', 0) > time.time():
+                    return token_data
+                # If expired but has refresh_token, return it for refresh
+                if 'refresh_token' in token_data:
+                    return token_data
         except Exception as e:
             logger.error(f"Failed to load token from file: {e}")
         return None
@@ -98,17 +150,16 @@ class TokenManager:
             Valid access token string
         """
         try:
-            spotify = self._create_spotify_client()
-            # Force token refresh if needed
-            if spotify._auth:
-                return spotify._auth
-            else:
-                raise ValueError("No valid access token available")
+            token_info, _ = self._ensure_token_info()
+            access_token = token_info.get('access_token')
+            if not access_token:
+                raise ValueError("Spotify token payload missing access_token")
+            return access_token
         except Exception as e:
             logger.error(f"Failed to get access token: {e}")
             raise
     
-    def refresh_token_if_needed(self) -> bool:
+    def refresh_token_if_needed(self, force: bool = False) -> bool:
         """
         Refresh token if it's expired or close to expiring.
         
@@ -116,21 +167,10 @@ class TokenManager:
             True if token was refreshed, False if still valid
         """
         try:
-            oauth = self._create_oauth_manager()
-            token_info = oauth.get_cached_token()
-            
-            if not token_info:
-                return False
-            
-            # Check if token needs refresh (expires in less than 5 minutes)
-            import time
-            if token_info.get('expires_at', 0) - time.time() < 300:
-                oauth.refresh_access_token(token_info['refresh_token'])
-                self._spotify = None  # Force recreation with new token
-                logger.info("Token refreshed successfully")
-                return True
-            
-            return False
+            _, refreshed = self._ensure_token_info(force_refresh=force)
+            if refreshed:
+                logger.info("Spotify access token refreshed")
+            return refreshed
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")
             return False
@@ -138,6 +178,9 @@ class TokenManager:
 
 class SpotifyApiWrapper:
     """Wrapper around spotipy for alarm playback operations"""
+    
+    DEVICE_CACHE_TTL_S = 0.75
+    TOKEN_VALIDATION_TTL_S = 300.0
     
     def __init__(self, token_manager: TokenManager):
         """
@@ -148,6 +191,8 @@ class SpotifyApiWrapper:
         """
         self.token_manager = token_manager
         self._spotify = None
+        self._device_cache: Optional[Tuple[List[CloudDevice], float]] = None
+        self._last_validation_ts: float = 0.0
     
     def _get_client(self) -> Spotify:
         """Get authenticated Spotify client"""
@@ -166,12 +211,32 @@ class SpotifyApiWrapper:
                 self._spotify._auth_manager.get_access_token = lambda: access_token
         return self._spotify
     
+    def invalidate_device_cache(self) -> None:
+        """Clear cached Spotify device list."""
+        self._device_cache = None
+    
+    def _validate_token_if_needed(self, client: Spotify) -> None:
+        """Call a lightweight validation endpoint only when stale."""
+        now = time.time()
+        if now - self._last_validation_ts < self.TOKEN_VALIDATION_TTL_S:
+            return
+        
+        try:
+            user_info = client.current_user()
+            user_id = user_info.get('id', 'unknown') if user_info else 'unknown'
+            user_display_name = user_info.get('display_name', 'unknown') if user_info else 'unknown'
+            logger.debug(f"Token validated: user_id={user_id}, display_name={user_display_name}")
+        except Exception as exc:
+            logger.warning(f"Failed to validate Spotify token via current_user(): {exc}")
+        finally:
+            self._last_validation_ts = now
+    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
         retry=retry_if_exception_type((SpotifyException,))
     )
-    def get_devices(self) -> List[CloudDevice]:
+    def get_devices(self, force_refresh: bool = False) -> List[CloudDevice]:
         """
         Get list of available Spotify devices.
         
@@ -179,18 +244,16 @@ class SpotifyApiWrapper:
             List of CloudDevice objects
         """
         try:
+            now = time.time()
+            if not force_refresh and self._device_cache:
+                cached_devices, cached_ts = self._device_cache
+                if now - cached_ts <= self.DEVICE_CACHE_TTL_S:
+                    logger.debug("Returning cached Spotify device list")
+                    return cached_devices
+            
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
-            
-            # First, verify token is valid by checking current user
-            try:
-                user_info = client.current_user()
-                user_id = user_info.get('id', 'unknown')
-                user_display_name = user_info.get('display_name', 'unknown')
-                logger.debug(f"Token validated: user_id={user_id}, display_name={user_display_name}")
-            except Exception as e:
-                logger.warning(f"Failed to verify token validity with current_user(): {e}")
-                # Continue anyway - might still work for devices
-            
+            self._validate_token_if_needed(client)
             devices_response = client.devices()
             devices = devices_response.get('devices', [])
             
@@ -208,13 +271,15 @@ class SpotifyApiWrapper:
                 cloud_devices.append(cloud_device)
             
             logger.debug(f"Retrieved {len(cloud_devices)} devices from Spotify API")
+            self._device_cache = (cloud_devices, time.time())
             return cloud_devices
             
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
-                self.token_manager.refresh_token_if_needed()
+                self.token_manager.refresh_token_if_needed(force=True)
                 self._spotify = None  # Force recreation with new token
+                self.invalidate_device_cache()
                 raise  # Let retry mechanism handle it
             else:
                 logger.error(f"Spotify API error getting devices: {e}")
@@ -267,14 +332,16 @@ class SpotifyApiWrapper:
             play: Whether to start playing immediately
         """
         try:
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
             client.transfer_playback(device_id=device_id, force_play=play)
             logger.debug(f"Transferred playback to device {device_id} (play={play})")
+            self.invalidate_device_cache()
             
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
-                self.token_manager.refresh_token_if_needed()
+                self.token_manager.refresh_token_if_needed(force=True)
                 self._spotify = None
                 raise
             else:
@@ -298,6 +365,7 @@ class SpotifyApiWrapper:
             percent: Volume percentage (0-100)
         """
         try:
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
             client.volume(volume_percent=percent, device_id=device_id)
             logger.debug(f"Set volume to {percent}% for device {device_id}")
@@ -305,7 +373,7 @@ class SpotifyApiWrapper:
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
-                self.token_manager.refresh_token_if_needed()
+                self.token_manager.refresh_token_if_needed(force=True)
                 self._spotify = None
                 raise
             else:
@@ -331,6 +399,7 @@ class SpotifyApiWrapper:
             shuffle: Whether to enable shuffle mode
         """
         try:
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
             
             # Set shuffle state BEFORE starting playback to ensure it applies to first track
@@ -370,6 +439,8 @@ class SpotifyApiWrapper:
                 client.start_playback(device_id=device_id)
                 logger.info(f"Started playback on device {device_id}")
                 
+            self.invalidate_device_cache()
+            
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
@@ -414,6 +485,7 @@ class SpotifyApiWrapper:
                     else:
                         client.start_playback(device_id=device_id)
                     logger.info(f"Retry successful - started playback on device {device_id}")
+                    self.invalidate_device_cache()
                 except SpotifyException as retry_e:
                     logger.error(f"Retry failed for device {device_id}: {retry_e}")
                     raise retry_e
@@ -432,6 +504,7 @@ class SpotifyApiWrapper:
             Current playback info or None if no active playback
         """
         try:
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
             playback_info = client.current_playback()
             return playback_info
@@ -439,7 +512,7 @@ class SpotifyApiWrapper:
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
-                self.token_manager.refresh_token_if_needed()
+                self.token_manager.refresh_token_if_needed(force=True)
                 self._spotify = None
                 raise
             else:
@@ -457,14 +530,16 @@ class SpotifyApiWrapper:
             device_id: Target device ID
         """
         try:
+            self.token_manager.refresh_token_if_needed()
             client = self._get_client()
             client.pause_playback(device_id=device_id)
             logger.info(f"Paused playback on device {device_id}")
+            self.invalidate_device_cache()
             
         except SpotifyException as e:
             if e.http_status == 401:
                 logger.warning("Access token expired, refreshing...")
-                self.token_manager.refresh_token_if_needed()
+                self.token_manager.refresh_token_if_needed(force=True)
                 self._spotify = None
                 raise
             else:
