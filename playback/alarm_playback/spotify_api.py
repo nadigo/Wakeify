@@ -181,6 +181,7 @@ class SpotifyApiWrapper:
     
     DEVICE_CACHE_TTL_S = 0.75
     TOKEN_VALIDATION_TTL_S = 300.0
+    PLAYLIST_CACHE_TTL_S = 300.0
     
     def __init__(self, token_manager: TokenManager):
         """
@@ -193,6 +194,8 @@ class SpotifyApiWrapper:
         self._spotify = None
         self._device_cache: Optional[Tuple[List[CloudDevice], float]] = None
         self._last_validation_ts: float = 0.0
+        # Cache playlist track counts to avoid repeated metadata fetches when shuffle is enabled
+        self._playlist_track_cache: Dict[str, Tuple[int, float]] = {}
     
     def _get_client(self) -> Spotify:
         """Get authenticated Spotify client"""
@@ -215,6 +218,56 @@ class SpotifyApiWrapper:
         """Clear cached Spotify device list."""
         self._device_cache = None
     
+    def _get_cached_playlist_tracks(self, playlist_id: str) -> Optional[int]:
+        """Return cached playlist track count if still fresh."""
+        cached = self._playlist_track_cache.get(playlist_id)
+        if not cached:
+            return None
+        count, cached_ts = cached
+        if time.time() - cached_ts <= self.PLAYLIST_CACHE_TTL_S:
+            return count
+        # Cache expired
+        self._playlist_track_cache.pop(playlist_id, None)
+        return None
+
+    def _set_cached_playlist_tracks(self, playlist_id: str, track_count: int) -> None:
+        """Store playlist track count in cache."""
+        if track_count < 0:
+            return
+        self._playlist_track_cache[playlist_id] = (track_count, time.time())
+
+    def _extract_playlist_id(self, context_uri: str) -> Optional[str]:
+        """Extract playlist ID from a Spotify context URI."""
+        if not context_uri:
+            return None
+        if context_uri.startswith("spotify:playlist:"):
+            return context_uri.split(":")[-1]
+        if context_uri.startswith("https://open.spotify.com/playlist/"):
+            return context_uri.rstrip("/").split("/")[-1].split("?")[0]
+        return None
+
+    def _get_playlist_track_count(self, client: Spotify, context_uri: str) -> Optional[int]:
+        """Retrieve total number of tracks for the playlist backing the given context."""
+        playlist_id = self._extract_playlist_id(context_uri)
+        if not playlist_id:
+            return None
+
+        cached_total = self._get_cached_playlist_tracks(playlist_id)
+        if cached_total is not None:
+            return cached_total
+
+        try:
+            playlist_info = client.playlist(playlist_id, fields='tracks.total')
+        except Exception as exc:
+            logger.debug(f"Failed to fetch playlist metadata for {playlist_id}: {exc}")
+            return None
+
+        total_tracks = playlist_info.get('tracks', {}).get('total', 0) if playlist_info else 0
+        if isinstance(total_tracks, int) and total_tracks >= 0:
+            self._set_cached_playlist_tracks(playlist_id, total_tracks)
+            return total_tracks
+        return None
+
     def _validate_token_if_needed(self, client: Spotify) -> None:
         """Call a lightweight validation endpoint only when stale."""
         now = time.time()
@@ -415,11 +468,9 @@ class SpotifyApiWrapper:
                 if shuffle and 'playlist' in context_uri:
                     # Get playlist track count for random offset
                     try:
-                        playlist_id = context_uri.split(':')[-1]
-                        playlist_info = client.playlist(playlist_id, fields='tracks.total')
-                        total_tracks = playlist_info.get('tracks', {}).get('total', 0)
+                        total_tracks = self._get_playlist_track_count(client, context_uri)
                         
-                        if total_tracks > 1:
+                        if total_tracks and total_tracks > 1:
                             # Pick a random starting position
                             random_offset = random.randint(0, total_tracks - 1)
                             logger.debug(f"Starting shuffled playlist at random position {random_offset} of {total_tracks}")
@@ -467,11 +518,9 @@ class SpotifyApiWrapper:
                     if context_uri:
                         if shuffle and 'playlist' in context_uri:
                             try:
-                                playlist_id = context_uri.split(':')[-1]
-                                playlist_info = client.playlist(playlist_id, fields='tracks.total')
-                                total_tracks = playlist_info.get('tracks', {}).get('total', 0)
+                                total_tracks = self._get_playlist_track_count(client, context_uri)
                                 
-                                if total_tracks > 1:
+                                if total_tracks and total_tracks > 1:
                                     random_offset = random.randint(0, total_tracks - 1)
                                     logger.info(f"Starting shuffled playlist at random position {random_offset} of {total_tracks} (retry)")
                                     client.start_playback(device_id=device_id, context_uri=context_uri, offset={"position": random_offset})
