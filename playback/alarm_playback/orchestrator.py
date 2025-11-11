@@ -21,6 +21,15 @@ from .logging_utils import (
 logger = get_logger(__name__)
 
 
+class AlarmPlaybackFailure(RuntimeError):
+    """Custom exception for alarm playback failures with additional metadata."""
+
+    def __init__(self, reason: str, manual_auth_required: bool = False):
+        self.reason = reason
+        self.manual_auth_required = manual_auth_required
+        super().__init__(f"Alarm playback failed (reason={reason}) and no fallback is available.")
+
+
 class AlarmPlaybackEngine:
     """Main orchestrator for alarm playback with failover capabilities"""
     
@@ -126,7 +135,13 @@ class AlarmPlaybackEngine:
         
         return None
     
-    def _failover(self, metrics: PhaseMetrics, target_name: str, reason: str) -> PhaseMetrics:
+    def _failover(
+        self,
+        metrics: PhaseMetrics,
+        target_name: str,
+        reason: str,
+        manual_auth_required: bool = False,
+    ) -> PhaseMetrics:
         """Record failure when the primary Spotify Connect flow cannot recover."""
         metrics.branch = f"failed:{reason}"
         metrics.add_error(
@@ -138,9 +153,7 @@ class AlarmPlaybackEngine:
             target_name,
             reason,
         )
-        raise RuntimeError(
-            f"Alarm playback failed (reason={reason}) and no fallback is available."
-        )
+        raise AlarmPlaybackFailure(reason, manual_auth_required)
     
     def play_alarm(self, target_name: str) -> PhaseMetrics:
         """
@@ -665,7 +678,46 @@ class AlarmPlaybackEngine:
             
             metrics.cloud_visible_ms = int((time.time() - total_start_time) * 1000)
             
+            # Post-auth grace polling if we successfully authenticated but didn't see the device
+            if not cloud_device and auth_ok and self.cfg.timings.post_auth_grace_s > 0:
+                grace_deadline = time.time() + self.cfg.timings.post_auth_grace_s
+                logger.warning(
+                    "Device %s still missing after %ss poll window; waiting an extra %ss because addUser succeeded",
+                    target_name,
+                    extended_deadline,
+                    self.cfg.timings.post_auth_grace_s,
+                )
+                while time.time() < grace_deadline and not cloud_device:
+                    try:
+                        devices = self.api.get_devices(force_refresh=True)
+                        cloud_device = self._pick_device(devices, target.name)
+                        if cloud_device:
+                            logger.info(
+                                "Device %s appeared during post-auth grace window (%ss after addUser)",
+                                cloud_device.name,
+                                self.cfg.timings.post_auth_grace_s
+                                - max(0.0, grace_deadline - time.time()),
+                            )
+                            if cloud_device.name not in target.spotify_device_names:
+                                target.spotify_device_names.append(cloud_device.name)
+                                logger.info(
+                                    "✓ LEARNED: Stored Spotify device name '%s' for device profile '%s'",
+                                    cloud_device.name,
+                                    target.name,
+                                )
+                                logger.info("  Device profile will be saved automatically after alarm completes")
+                            break
+                        time.sleep(self.cfg.timings.post_auth_grace_sleep_s)
+                    except Exception as grace_error:
+                        logger.debug(
+                            "Post-auth grace polling failed (non-fatal) for %s: %s",
+                            target_name,
+                            grace_error,
+                        )
+                        time.sleep(self.cfg.timings.post_auth_grace_sleep_s)
+            
             if not cloud_device:
+                manual_auth_required = auth_ok
                 # Log final diagnostic information
                 try:
                     final_devices = self.api.get_devices(force_refresh=True)
@@ -673,13 +725,18 @@ class AlarmPlaybackEngine:
                     logger.error(f"Device {target_name} did not appear in Spotify devices after {extended_deadline}s")
                     logger.error(f"Final device list: {final_device_names}")
                     logger.error(f"Matching names tried: {target.get_all_matching_names()}")
-                    if auth_ok:
+                    if manual_auth_required:
                         logger.error(f"Note: addUser succeeded but device still didn't appear - device may need manual authentication first")
                         logger.error(f"Try: Open Spotify app, select '{target_name}', play a song to authenticate")
                 except Exception as e:
                     logger.error(f"Failed to get final device list for diagnostics: {e}")
                 
-                return self._failover(metrics, target_name, "not_in_devices_by_deadline")
+                return self._failover(
+                    metrics,
+                    target_name,
+                    "not_in_devices_by_deadline",
+                    manual_auth_required=manual_auth_required,
+                )
             
             cloud_poll_duration = int((time.time() - cloud_poll_start) * 1000)
             log_phase_end(logger, "cloud_poll", target_name, cloud_poll_duration, True)

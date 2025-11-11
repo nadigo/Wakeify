@@ -17,7 +17,7 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 # Import the comprehensive playback engine
-from alarm_playback import AlarmPlaybackEngine
+from alarm_playback import AlarmPlaybackEngine, AlarmPlaybackFailure
 from alarm_playback.config import AlarmPlaybackConfig, DeviceProfile, PlaybackMetrics
 
 # Import APScheduler for better scheduling
@@ -119,7 +119,7 @@ sp_oauth = SpotifyOAuth(
     scope="user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private",
     cache_path=TOKEN_FILE,
     open_browser=False,
-    show_dialog=True
+    show_dialog=False
 )
 
 # Global variables
@@ -129,6 +129,7 @@ spotify = None
 scheduler = None
 running = True
 alarm_config = None
+manual_auth_flags: Dict[str, bool] = {}
 
 # Performance: Device cache
 device_cache = None
@@ -370,6 +371,7 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
         # Execute full timeline
         logger.debug(f"Starting T-60s timeline for {target_device_name}")
         metrics = engine.play_alarm(target_device_name)
+        manual_auth_flags[target_device_name] = False
         
         # Save device profiles after alarm execution to persist any learned Spotify device names
         try:
@@ -408,7 +410,14 @@ def run_alarm(alarm: Dict[str, Any]) -> None:
                 logger.warning(f"  - {error['error']} (phase: {error.get('phase', 'unknown')})")
         
             
+    except AlarmPlaybackFailure as failure:
+        if failure.manual_auth_required:
+            manual_auth_flags[target_device_name] = True
+        logger.error(f"Error running alarm {alarm.get('id', 'unknown')}: {failure}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
     except Exception as e:
+        manual_auth_flags[target_device_name] = manual_auth_flags.get(target_device_name, False)
         logger.error(f"Error running alarm {alarm.get('id', 'unknown')}: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
@@ -820,126 +829,141 @@ async def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    """Main page."""
-    # Check for callback parameters
+async def build_page_context(request: Request) -> Dict[str, Any]:
+    """Build shared context for classic and new UI routes."""
     connected = request.query_params.get("connected")
     error = request.query_params.get("error")
-    
-    # Check Spotify connection status
+
     sp = get_spotify_client()
     is_connected = sp is not None
-    
+
+    context: Dict[str, Any] = {
+        "request": request,
+        "alarms": alarms,
+        "default_speaker": DEFAULT_SPEAKER,
+        "default_volume": DEFAULT_VOLUME,
+        "default_shuffle": DEFAULT_SHUFFLE,
+        "spotify_connected": is_connected,
+        "spotify_auth_url": None,
+        "auth_error": error,
+        "auth_success": connected,
+        "manual_auth_devices": [name for name, required in manual_auth_flags.items() if required],
+    }
+
     if not is_connected:
-        # Show connection screen
-            return templates.TemplateResponse("index.html", {
-                "request": request,
-            "alarms": alarms,
-                "playlists": [],
-                "devices": [],
-            "default_speaker": DEFAULT_SPEAKER,
-            "default_volume": DEFAULT_VOLUME,
-            "default_shuffle": DEFAULT_SHUFFLE,
-            "spotify_connected": False,
-            "spotify_auth_url": sp_oauth.get_authorize_url(),
-            "auth_error": error,
-            "auth_success": connected
-        })
-    
-        # Get Spotify playlists (cached)
-    playlists = []
+        try:
+            context["spotify_auth_url"] = sp_oauth.get_authorize_url()
+        except Exception as exc:
+            logger.error(f"Error generating Spotify auth URL: {exc}")
+            context["spotify_auth_url"] = None
+
+        context["playlists"] = []
+        context["devices"] = []
+        return context
+
+    playlists: List[Dict[str, Any]] = []
     try:
         global playlist_cache, playlist_cache_timestamp
         if playlist_cache and playlist_cache_timestamp and (time.time() - playlist_cache_timestamp) < playlist_cache_ttl:
             playlists = playlist_cache
         else:
             playlists_response = sp.current_user_playlists(limit=50)
-            playlists = playlists_response.get('items', [])
+            playlists = playlists_response.get("items", [])
             playlist_cache = playlists
             playlist_cache_timestamp = time.time()
-    except Exception as e:
-        logger.error(f"Error getting playlists: {e}")
-    
-    # Get all devices from cache (fast - no mDNS on every page load)
-    all_devices = []
+    except Exception as exc:
+        logger.error(f"Error getting playlists: {exc}")
+
+    context["playlists"] = playlists
+
+    all_devices: List[Dict[str, Any]] = []
     try:
         global device_cache, device_cache_timestamp, device_cache_ttl
-        
-        # Use cached devices from test page (includes all mDNS + Spotify devices)
+
         if device_cache and device_cache_timestamp and (time.time() - device_cache_timestamp) < device_cache_ttl:
-            # Use cached data (includes all devices from test page)
-            all_devices = [{
-                "name": d["name"],
-                "ip": d["ip"],
-                "is_online": d["is_online"]
-            } for d in device_cache.get("devices", [])]
+            all_devices = [
+                {
+                    "name": device["name"],
+                    "ip": device["ip"],
+                    "is_online": device["is_online"],
+                }
+                for device in device_cache.get("devices", [])
+            ]
         else:
-            # No cache - fetch all devices directly
-            try:
-                # Get mDNS devices
-                from alarm_playback.discovery import discover_all_connect_devices
-                loop = asyncio.get_event_loop()
-                # Use await to get the result from executor
-                mdn_result = await loop.run_in_executor(None, discover_all_connect_devices, 1.0)
-                
-                mdn_device_names = set()
-                for device in mdn_result:
-                    # Discovery共同lt doesn't have is_online, check via health check
-                    from alarm_playback.zeroconf_client import check_device_health
-                    health_info = check_device_health(device.ip, device.port, device.cpath or "/", timeout_s=0.1)
-                    
-                    # Use DeviceRegistry to get name from device properties (getInfo)
-                    device_name = None
-                    try:
-                        if alarm_config:
-                            import sys
-                            sys.path.insert(0, str(APP_DIR))
-                            from device_registry import DeviceRegistry
-                            device_registry = DeviceRegistry(alarm_config)
-                            device_name = device_registry._extract_friendly_name(device)
-                    except Exception as e:
-                        logger.debug(f"Error extracting friendly name: {e}")
-                    
-                    # Fallback to instance_name if extraction failed
-                    if not device_name:
-                        device_name = device.instance_name or device.name
-                    
-                    all_devices.append({
+            from alarm_playback.discovery import discover_all_connect_devices
+            from alarm_playback.zeroconf_client import check_device_health
+
+            loop = asyncio.get_event_loop()
+            mdn_result = await loop.run_in_executor(None, discover_all_connect_devices, 1.0)
+
+            mdn_device_names = set()
+            for device in mdn_result:
+                health_info = check_device_health(device.ip, device.port, device.cpath or "/", timeout_s=0.1)
+
+                device_name = None
+                try:
+                    if alarm_config:
+                        import sys
+
+                        sys.path.insert(0, str(APP_DIR))
+                        from device_registry import DeviceRegistry
+
+                        device_registry = DeviceRegistry(alarm_config)
+                        device_name = device_registry._extract_friendly_name(device)
+                except Exception as exc:
+                    logger.debug(f"Error extracting friendly name: {exc}")
+
+                if not device_name:
+                    device_name = device.instance_name or device.name
+
+                all_devices.append(
+                    {
                         "name": device_name,
                         "ip": device.ip,
-                        "is_online": health_info['responding']
-                    })
-                    mdn_device_names.add(device_name.upper())
-                
-                # Get Spotify devices (not already found via mDNS)
-                devices_response = sp.devices()
-                for dev in devices_response.get('devices', []):
-                    dev_name = dev.get('name', 'Unknown')
-                    if dev_name.upper() not in mdn_device_names:
-                        all_devices.append({
+                        "is_online": health_info["responding"],
+                    }
+                )
+                mdn_device_names.add(device_name.upper())
+
+            devices_response = sp.devices()
+            for dev in devices_response.get("devices", []):
+                dev_name = dev.get("name", "Unknown")
+                if dev_name.upper() not in mdn_device_names:
+                    all_devices.append(
+                        {
                             "name": dev_name,
                             "ip": None,
-                            "is_online": dev.get('is_active', False)
-                        })
-            except Exception as e:
-                logger.error(f"Error getting devices: {e}")
-                all_devices = []
-    except Exception as e:
-        logger.error(f"Error getting devices: {e}")
+                            "is_online": dev.get("is_active", False),
+                        }
+                    )
+    except Exception as exc:
+        logger.error(f"Error getting devices: {exc}")
         all_devices = []
-        
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "alarms": alarms,
-        "playlists": playlists,
-        "devices": all_devices,
-        "default_speaker": DEFAULT_SPEAKER,
-        "default_volume": DEFAULT_VOLUME,
-        "default_shuffle": DEFAULT_SHUFFLE,
-        "spotify_connected": True,
-        "spotify_auth_url": None
-    })
+
+    context["devices"] = all_devices
+    return context
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    """Classic UI."""
+    context = await build_page_context(request)
+    context["active_view"] = "classic"
+    return templates.TemplateResponse("index.html", context)
+
+
+@app.get("/aurora", response_class=HTMLResponse)
+async def aurora(request: Request):
+    """Aurora refreshed UI."""
+    context = await build_page_context(request)
+    context["active_view"] = "aurora"
+    return templates.TemplateResponse("aurora/index.html", context)
+
+
+@app.get("/aurora/", response_class=HTMLResponse, include_in_schema=False)
+async def aurora_trailing_slash(request: Request):
+    """Support trailing-slash access pattern."""
+    return await aurora(request)
 
 @app.get("/api/playlists")
 async def get_playlists():
